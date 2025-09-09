@@ -1,0 +1,111 @@
+spring:
+  application:
+    name: bootcamp-service
+  r2dbc:
+    url: r2dbc:mysql://localhost:3309/bootcamp_db
+    username: boot_user
+    password: supersecure_pwd
+  webflux:
+    base-path: /api/v1
+
+server:
+  port: 8083
+
+app:
+  capacity:
+    base-url: http://localhost:8082/api/v1
+  technology:
+    base-url: http://localhost:8081/api/v1
+
+# OpenAPI / Swagger
+springdoc:
+  api-docs:
+    path: /api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    operationsSorter: method
+    tagsSorter: alpha
+
+# Actuator / Health / Metrics / Tracing
+management:
+  tracing:
+    sampling:
+      probability: ${TRACING_PROBABILITY:0.1}
+    baggage:
+      correlation:
+        fields:
+          - messageId
+          - x-message-id
+      remote-fields: messageId,x-message-id
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,loggers,prometheus
+      base-path: /
+      path-mapping:
+        health: actuator/health
+        metrics: actuator/metrics
+        loggers: ${spring.application.name}/actuator/loggers
+  endpoint:
+    health:
+      probes:
+        enabled: false
+      show-details: "always"
+  health:
+    circuitbreakers:
+      enabled: true
+    diskspace:
+      enabled: false
+    r2dbc:
+      enabled: true
+    ping:
+      enabled: false
+    refresh:
+      enabled: false
+
+# Resilience4j
+resilience4j:
+  circuitbreaker:
+    circuit-breaker-aspect-order: 1
+    configs:
+      default:
+        register-health-indicator: true
+    instances:
+      capacityClient:
+        base-config: default
+      technologyClient:
+        base-config: default
+  retry:
+    configs:
+      default:
+        maxAttempts: 3
+        waitDuration: 2000ms
+        enableExponentialBackoff: true
+        exponentialBackoffMultiplier: 2.0
+        maxWaitDuration: 10000ms
+        initialInterval: 500ms
+    instances:
+      capacityRetry:
+        maxAttempts: 5
+        waitDuration: 1000ms
+      technologyRetry:
+        maxAttempts: 5
+        waitDuration: 1000ms
+  bulkhead:
+    configs:
+      default:
+        maxConcurrentCalls: 10
+        maxWaitDuration: 500ms
+    instances:
+      capacityBulkhead:
+        maxConcurrentCalls: 5
+        maxWaitDuration: 1s
+      technologyBulkhead:
+        maxConcurrentCalls: 5
+        maxWaitDuration: 1s
+
+logging:
+  level:
+    root: INFO
+    org.springframework.r2dbc: DEBUG
+    io.r2dbc.pool: INFO

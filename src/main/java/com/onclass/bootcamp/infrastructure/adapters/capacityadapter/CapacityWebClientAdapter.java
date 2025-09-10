@@ -59,27 +59,10 @@ public class CapacityWebClientAdapter implements CapacityGatewayPort {
                                         .map(APIResponse::getData)
                                         .doOnNext(c -> log.info("Fetched capacity {} -> {}", id, c))
                                         .doOnError(ex -> log.error("Error fetching capacity {}", id, ex))
-                                        .map(this::toIdNameOnly)
                                         .onErrorResume(ex -> Mono.empty()),
                         concurrency
                 );
     }
-
-
-    private CapacityDTO toIdNameOnly(CapacityDTO dto) {
-        if (dto == null) {
-            log.warn("CapacityWebClientAdapter recibió un DTO nulo");
-            return new CapacityDTO();
-        }
-        CapacityDTO out = new CapacityDTO();
-        out.setId(dto.getId());
-        out.setName(dto.getName());
-        out.setDescription(dto.getDescription());
-        out.setTechnologyIds(dto.getTechnologyIds());
-        return out;
-    }
-
-
 
     private static List<Long> distinct(List<Long> ids) {
         Set<Long> set = ids.stream().collect(Collectors.toSet());

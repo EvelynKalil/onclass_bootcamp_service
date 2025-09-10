@@ -19,6 +19,7 @@ public interface BootcampCapacityRepository extends ReactiveCrudRepository<Bootc
     """)
     Flux<BootcampCapacityIdRow> findCapacityIdsByBootcampIds(Collection<Long> bootcampIds);
 
+
     interface BootcampCapacityIdRow {
         Long getBootcampId();
         Long getCapacityId();

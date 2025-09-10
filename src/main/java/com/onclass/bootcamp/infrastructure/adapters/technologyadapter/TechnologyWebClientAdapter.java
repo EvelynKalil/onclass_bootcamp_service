@@ -50,22 +50,16 @@ public class TechnologyWebClientAdapter implements TechnologyGatewayPort {
         WebClient wc = client();
         int concurrency = 5;
 
-        return Flux.fromIterable(distinct(ids))
+        return Flux.fromIterable(ids)
                 .flatMap(id ->
                                 wc.get()
                                         .uri(uriBuilder -> uriBuilder.path("/technologies/{id}").build(id))
                                         .retrieve()
-                                        .bodyToMono(new ParameterizedTypeReference<APIResponse<TechnologyDTO>>() {})
-                                        .map(APIResponse::getData)
+                                        .bodyToMono(TechnologyDTO.class) // 👈 directo al objeto
                                         .doOnNext(t -> log.info("Fetched technology {} -> {}", id, t))
                                         .doOnError(ex -> log.error("Error fetching technology {}", id, ex))
                                         .onErrorResume(ex -> Mono.empty()),
                         concurrency
                 );
-    }
-
-    private static List<Long> distinct(List<Long> ids) {
-        Set<Long> set = ids.stream().collect(Collectors.toSet());
-        return set.stream().toList();
     }
 }

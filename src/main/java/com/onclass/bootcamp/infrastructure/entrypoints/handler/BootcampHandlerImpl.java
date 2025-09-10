@@ -9,6 +9,8 @@ import com.onclass.bootcamp.domain.model.Order;
 import com.onclass.bootcamp.domain.model.Bootcamp;
 import com.onclass.bootcamp.domain.spi.CapacityGatewayPort;
 import com.onclass.bootcamp.domain.spi.TechnologyGatewayPort;
+import com.onclass.bootcamp.infrastructure.adapters.persistenceadapter.entity.BootcampCapacityEntity;
+import com.onclass.bootcamp.infrastructure.adapters.persistenceadapter.repository.BootcampCapacityRepository;
 import com.onclass.bootcamp.infrastructure.entrypoints.dto.*;
 import com.onclass.bootcamp.infrastructure.entrypoints.mapper.BootcampMapper;
 import com.onclass.bootcamp.infrastructure.entrypoints.util.APIResponse;
@@ -26,6 +28,7 @@ import reactor.core.publisher.Mono;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Map;
 
 @Slf4j
 @Component
@@ -38,7 +41,10 @@ public class BootcampHandlerImpl {
     private final BootcampMapper mapper;
     private final CapacityGatewayPort capacityGatewayPort;
     private final TechnologyGatewayPort technologyGatewayPort;
+    private final BootcampCapacityRepository bootcampCapacityRepository; // 👈 agregado
 
+
+    // ====================== CREATE ======================
     public Mono<ServerResponse> create(ServerRequest request) {
         final String messageId = request.headers().firstHeader(X_MESSAGE_ID);
         log.info("[{}] POST /bootcamps", messageId);
@@ -62,6 +68,7 @@ public class BootcampHandlerImpl {
                 .onErrorResume(ex -> handleError(ex, messageId));
     }
 
+    // ====================== LIST ======================
     public Mono<ServerResponse> list(ServerRequest request) {
         final String messageId = request.headers().firstHeader(X_MESSAGE_ID);
         log.info("[{}] GET /bootcamps", messageId);
@@ -80,44 +87,99 @@ public class BootcampHandlerImpl {
         var pr = new PageRequest(page, size);
 
         return service.list(pr, sortBy, order)
-                .flatMap(pageDomain -> Flux.fromIterable(pageDomain.content())
-                        .flatMap(bootcamp ->
-                                capacityGatewayPort.fetchByIds(bootcamp.getCapacityIds())
+                .flatMap(pageDomain -> {
+                    var bootcamps = pageDomain.content();
+                    log.info("[{}] Se obtuvieron {} bootcamps de la DB", messageId, bootcamps.size());
+
+                    return Flux.fromIterable(bootcamps)
+                            .flatMap(bootcamp -> {
+                                log.info("[{}] Procesando bootcamp {} - {}", messageId, bootcamp.getId(), bootcamp.getName());
+
+                                // (1) Obtener capacityIds desde bootcamp_capacities
+                                return bootcampCapacityRepository.findAllByBootcampId(bootcamp.getId())
+                                        .doOnNext(row -> log.info("[{}] Bootcamp {} tiene capacityId={}",
+                                                messageId, bootcamp.getId(), row.getCapacityId()))
+                                        .map(BootcampCapacityEntity::getCapacityId)
                                         .collectList()
-                                        .flatMap(capacities ->
-                                                Flux.fromIterable(capacities)
-                                                        .flatMap(cap ->
-                                                                technologyGatewayPort.fetchByIds(cap.getTechnologyIds())
-                                                                        .collectList()
-                                                                        .map(techs -> new CapacityListItemDTO(
-                                                                                cap.getId(),
-                                                                                cap.getName(),
-                                                                                cap.getDescription(),
-                                                                                techs.size(),
-                                                                                techs
-                                                                        ))
-                                                        )
-                                                        .collectList()
-                                                        .map(capacityList -> mapper.toListItemDTO(bootcamp, capacityList))
-                                        )
-                        )
-                        .collectList()
-                        .map(content -> new PageResponse<>(
-                                content,
-                                pageDomain.page(),
-                                pageDomain.size(),
-                                pageDomain.totalElements(),
-                                pageDomain.totalPages()
-                        ))
-                )
+                                        .flatMap(capIds -> {
+                                            log.info("[{}] Bootcamp {} capacityIds encontrados: {}",
+                                                    messageId, bootcamp.getId(), capIds);
+
+                                            if (capIds.isEmpty()) {
+                                                return Mono.just(mapper.toListItemDTO(bootcamp, List.of()));
+                                            }
+
+                                            // (2) Pedir detalles de esas capacities al capacity-service
+                                            return capacityGatewayPort.fetchByIds(capIds)
+                                                    .collectList()
+                                                    .flatMap(capacities -> {
+                                                        log.info("[{}] Capacity-service devolvió {} capacities para bootcamp {}",
+                                                                messageId, capacities.size(), bootcamp.getId());
+
+                                                        return Flux.fromIterable(capacities)
+                                                                .flatMap(cap ->
+                                                                        technologyGatewayPort.fetchByIds(cap.getTechnologyIds())
+                                                                                .collectList()
+                                                                                .map(techs -> {
+                                                                                    log.info("[{}] Capacity {} tiene {} technologies",
+                                                                                            messageId, cap.getId(), techs.size());
+                                                                                    return new CapacityListItemDTO(
+                                                                                            cap.getId(),
+                                                                                            cap.getName(),
+                                                                                            cap.getDescription(),
+                                                                                            techs.size(),
+                                                                                            techs
+                                                                                    );
+                                                                                })
+                                                                )
+                                                                .collectList()
+                                                                .map(capacityList -> mapper.toListItemDTO(bootcamp, capacityList));
+                                                    });
+                                        });
+                            })
+                            .collectList()
+                            .map(content -> new PageResponse<>(
+                                    content,
+                                    pageDomain.page(),
+                                    pageDomain.size(),
+                                    pageDomain.totalElements(),
+                                    pageDomain.totalPages()
+                            ));
+                })
                 .flatMap(payload -> ServerResponse.ok()
                         .contentType(MediaType.APPLICATION_JSON)
                         .bodyValue(payload)
                 )
-                .onErrorResume(ex -> handleError(ex, messageId));
+                .onErrorResume(ex -> {
+                    log.error("[{}] Error en list()", messageId, ex);
+                    return handleError(ex, messageId);
+                });
     }
 
-    // getById igual que antes ...
+
+    // ====================== GET BY ID ======================
+    public Mono<ServerResponse> getById(ServerRequest request) {
+        final String messageId = request.headers().firstHeader(X_MESSAGE_ID);
+        final Long id = Long.valueOf(request.pathVariable("id"));
+        log.info("[{}] GET /bootcamps/{}", messageId, id);
+
+        return service.findById(id)
+                .map(mapper::toDto)
+                .flatMap(dto -> {
+                    APIResponse<BootcampDTO> body = APIResponse.<BootcampDTO>builder()
+                            .code(String.valueOf(HttpStatus.OK.value()))
+                            .message("OK")
+                            .identifier(messageId)
+                            .date(nowIso())
+                            .data(dto)
+                            .build();
+                    return ServerResponse.ok()
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .bodyValue(body);
+                })
+                .switchIfEmpty(notFound(messageId, "Bootcamp not found", "id"))
+                .onErrorResume(ex -> handleError(ex, messageId));
+    }
 
     /* ====================== helpers ====================== */
     private static String nowIso() {
@@ -169,28 +231,4 @@ public class BootcampHandlerImpl {
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(body);
     }
-
-    public Mono<ServerResponse> getById(ServerRequest request) {
-        final String messageId = request.headers().firstHeader(X_MESSAGE_ID);
-        final Long id = Long.valueOf(request.pathVariable("id"));
-        log.info("[{}] GET /bootcamps/{}", messageId, id);
-
-        return service.findById(id)
-                .map(mapper::toDto)
-                .flatMap(dto -> {
-                    APIResponse<BootcampDTO> body = APIResponse.<BootcampDTO>builder()
-                            .code(String.valueOf(HttpStatus.OK.value()))
-                            .message("OK")
-                            .identifier(messageId)
-                            .date(nowIso())
-                            .data(dto)
-                            .build();
-                    return ServerResponse.ok()
-                            .contentType(MediaType.APPLICATION_JSON)
-                            .bodyValue(body);
-                })
-                .switchIfEmpty(notFound(messageId, "Bootcamp not found", "id"))
-                .onErrorResume(ex -> handleError(ex, messageId));
-    }
-
 }
